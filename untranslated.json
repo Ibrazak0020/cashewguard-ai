@@ -1,0 +1,25 @@
+{
+  "ha": [
+    "skip",
+    "onboardStep01",
+    "onboardStep02",
+    "onboardStep03",
+    "onboardTitle1",
+    "onboardSubtitle1",
+    "onboardFeature1a",
+    "onboardFeature1b",
+    "onboardFeature1c",
+    "onboardTitle2",
+    "onboardSubtitle2",
+    "onboardFeature2a",
+    "onboardFeature2b",
+    "onboardFeature2c",
+    "onboardTitle3",
+    "onboardSubtitle3",
+    "onboardFeature3a",
+    "onboardFeature3b",
+    "onboardFeature3c",
+    "nextButton",
+    "getStartedButton"
+  ]
+}

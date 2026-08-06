@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "964178693004",
+    "project_id": "cashewguard-ai",
+    "storage_bucket": "cashewguard-ai.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:964178693004:android:46481fd288e4690600a4a9",
+        "android_client_info": {
+          "package_name": "com.example.cashewguard_ai"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDE8509x9jXbvliKh4ZcfHvjGok15FK508"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
