@@ -230,7 +230,7 @@ class _SplashScreen1State extends State<SplashScreen1>
                 child: FadeTransition(
                   opacity: _fadeAnim,
                   child: Text(
-                    'Abiola Ajimobi Technical University',
+                    '© 2026 CashewGuard AI. All rights reserved.',
                     textAlign: TextAlign.center,
                     style: GoogleFonts.inter(
                       fontSize: 12,
