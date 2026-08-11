@@ -1,4 +1,4 @@
-// ignore_for_file: deprecated_member_use, avoid_print, depend_on_referenced_packages
+// ignore_for_file: avoid_print, depend_on_referenced_packages
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -70,6 +70,12 @@ class ScanService {
   /// privacy, or null if location isn't available/permitted, or if the
   /// farmer has turned off location sharing in Privacy Settings. Never
   /// throws — a scan should still save even if location fails.
+  /// Public wrapper so screens (e.g. the Outbreak Watch map) can center
+  /// on the farmer's own approximate location without duplicating the
+  /// permission/rounding logic.
+  Future<(double, double)?> getCurrentRoundedLocation() =>
+      _getRoundedLocation();
+
   Future<(double, double)?> _getRoundedLocation() async {
     try {
       final prefs = await SharedPreferences.getInstance();

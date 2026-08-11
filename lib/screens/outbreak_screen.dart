@@ -1,6 +1,8 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import '../services/scan_service.dart';
 
 class OutbreakScreen extends StatefulWidget {
@@ -17,6 +19,7 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
   bool _isLoading = true;
   String? _error;
   List<Map<String, dynamic>> _reports = [];
+  LatLng? _center;
   double _radiusKm = 15;
 
   @override
@@ -31,12 +34,18 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
       _error = null;
     });
     try {
+      final location = await _scanService.getCurrentRoundedLocation();
+      if (location == null) {
+        throw Exception(
+            'Location unavailable — enable location access to see nearby outbreaks.');
+      }
       final reports = await _scanService.getNearbyOutbreaks(
         radiusKm: _radiusKm,
         days: 14,
       );
       if (!mounted) return;
       setState(() {
+        _center = LatLng(location.$1, location.$2);
         _reports = reports;
         _isLoading = false;
       });
@@ -64,6 +73,22 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
       default:
         return _green;
     }
+  }
+
+  LatLng _approximatePosition(String disease, double distanceKm) {
+    final center = _center!;
+    final angle = (disease.hashCode % 360) * (math.pi / 180);
+    final dLat = (distanceKm / 111.0) * math.cos(angle);
+    final dLng = (distanceKm /
+            (111.0 * math.cos(center.latitude * math.pi / 180))) *
+        math.sin(angle);
+    return LatLng(center.latitude + dLat, center.longitude + dLng);
+  }
+
+  double get _zoomForRadius {
+    if (_radiusKm <= 10) return 12.2;
+    if (_radiusKm <= 15) return 11.6;
+    return 10.6;
   }
 
   @override
@@ -163,6 +188,12 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
   }
 
   Widget _buildContent() {
+    final mostCommon = _reports.isNotEmpty
+        ? (_reports..sort((a, b) =>
+                (b['report_count'] as num).compareTo(a['report_count'] as num)))
+            .first['disease_name'] as String
+        : null;
+
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 8, 24, 40),
       child: Column(
@@ -183,31 +214,117 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
           _buildRadiusToggle(),
           const SizedBox(height: 20),
 
-          // Radar visualization
+          if (mostCommon != null) _buildSummaryCard(mostCommon),
+          if (mostCommon != null) const SizedBox(height: 20),
+
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(20),
+            height: 320,
+            clipBehavior: Clip.antiAlias,
             decoration: BoxDecoration(
-              color: Colors.white,
               borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
-                  color: _green.withValues(alpha: 0.06),
+                  color: _green.withValues(alpha: 0.1),
                   blurRadius: 20,
                   offset: const Offset(0, 6),
                 ),
               ],
             ),
-            child: AspectRatio(
-              aspectRatio: 1,
-              child: CustomPaint(
-                painter: _RadarPainter(
-                  reports: _reports,
-                  radiusKm: _radiusKm,
-                  colorFor: _diseaseColor,
+            child: FlutterMap(
+              options: MapOptions(
+                initialCenter: _center!,
+                initialZoom: _zoomForRadius,
+                interactionOptions: const InteractionOptions(
+                  flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
                 ),
-                child: const SizedBox.expand(),
               ),
+              children: [
+                TileLayer(
+                  urlTemplate:
+                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName: 'com.cashewguard.ai',
+                ),
+                CircleLayer(
+                  circles: [
+                    CircleMarker(
+                      point: _center!,
+                      radius: _radiusKm * 1000,
+                      useRadiusInMeter: true,
+                      color: _green.withValues(alpha: 0.06),
+                      borderColor: _green.withValues(alpha: 0.4),
+                      borderStrokeWidth: 1.5,
+                    ),
+                  ],
+                ),
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: _center!,
+                      width: 36,
+                      height: 36,
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: _green,
+                          shape: BoxShape.circle,
+                          border: Border.all(color: Colors.white, width: 3),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withValues(alpha: 0.25),
+                              blurRadius: 6,
+                            ),
+                          ],
+                        ),
+                        child: const Icon(Icons.person,
+                            color: Colors.white, size: 18),
+                      ),
+                    ),
+                    ..._reports.map((report) {
+                      final disease =
+                          (report['disease_name'] ?? '').toString();
+                      final closest =
+                          (report['closest_km'] as num?)?.toDouble() ?? 0;
+                      final count =
+                          (report['report_count'] as num?)?.toInt() ?? 1;
+                      final color = _diseaseColor(disease);
+                      final size = 32.0 + (count.clamp(1, 8) * 2);
+                      return Marker(
+                        point: _approximatePosition(disease, closest),
+                        width: size,
+                        height: size,
+                        child: GestureDetector(
+                          onTap: () => _showReportDetail(
+                              context, disease, count, closest, color),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: color.withValues(alpha: 0.85),
+                              shape: BoxShape.circle,
+                              border:
+                                  Border.all(color: Colors.white, width: 2),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: Colors.black.withValues(alpha: 0.25),
+                                  blurRadius: 6,
+                                ),
+                              ],
+                            ),
+                            child: const Icon(Icons.report_problem,
+                                color: Colors.white, size: 16),
+                          ),
+                        ),
+                      );
+                    }),
+                  ],
+                ),
+                RichAttributionWidget(
+                  attributions: [
+                    TextSourceAttribution(
+                      'OpenStreetMap contributors',
+                      onTap: () {},
+                    ),
+                  ],
+                ),
+              ],
             ),
           ),
 
@@ -267,6 +384,65 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
           ),
         );
       }).toList(),
+    );
+  }
+
+  Widget _buildSummaryCard(String mostCommon) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [Color(0xFF2E7D32), Color(0xFF4CAF50)],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: _green.withValues(alpha: 0.3),
+            blurRadius: 20,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 52,
+            height: 52,
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.2),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.insights, color: Colors.white, size: 28),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Most common issue',
+                  style: GoogleFonts.inter(
+                    fontSize: 12,
+                    color: Colors.white.withValues(alpha: 0.85),
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  mostCommon,
+                  style: GoogleFonts.manrope(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: Colors.white,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -334,8 +510,6 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
     );
   }
 
-  // ✅ AI: shows the actual report details before offering to chat, so
-  // tapping a card doesn't jump straight past the information itself.
   void _showReportDetail(
     BuildContext context,
     String disease,
@@ -400,7 +574,7 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Reports are anonymous — exact farm locations are never shown, only aggregate counts.',
+                'Reports are anonymous — exact farm locations are never shown, only aggregate counts. Map markers show an approximate distance, not an exact position.',
                 style: GoogleFonts.inter(
                   fontSize: 12,
                   color: const Color(0xFF40493D).withValues(alpha: 0.7),
@@ -450,106 +624,6 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
     );
   }
 }
-
-class _RadarPainter extends CustomPainter {
-  final List<Map<String, dynamic>> reports;
-  final double radiusKm;
-  final Color Function(String) colorFor;
-
-  _RadarPainter({
-    required this.reports,
-    required this.radiusKm,
-    required this.colorFor,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final maxRadius = (size.shortestSide / 2) - 24;
-
-    final ringPaint = Paint()
-      ..color = const Color(0xFF0D631B).withValues(alpha: 0.15)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1;
-
-    // 3 concentric distance rings
-    for (int i = 1; i <= 3; i++) {
-      canvas.drawCircle(center, maxRadius * i / 3, ringPaint);
-    }
-
-    // Ring distance labels
-    final labelStyle = TextStyle(
-      color: const Color(0xFF40493D).withValues(alpha: 0.6),
-      fontSize: 9,
-    );
-    for (int i = 1; i <= 3; i++) {
-      final km = (radiusKm * i / 3).round();
-      final tp = TextPainter(
-        text: TextSpan(text: '${km}km', style: labelStyle),
-        textDirection: TextDirection.ltr,
-      )..layout();
-      tp.paint(
-        canvas,
-        Offset(center.dx + 4, center.dy - (maxRadius * i / 3) - tp.height),
-      );
-    }
-
-    // Center "you" marker
-    final centerPaint = Paint()..color = const Color(0xFF0D631B);
-    canvas.drawCircle(center, 8, centerPaint);
-    canvas.drawCircle(
-      center,
-      8,
-      Paint()
-        ..color = Colors.white
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2,
-    );
-
-    // Plot each disease report at an angle derived from its name (stable
-    // across rebuilds) and distance scaled to closest_km.
-    for (int i = 0; i < reports.length; i++) {
-      final report = reports[i];
-      final disease = (report['disease_name'] ?? '').toString();
-      final closest = (report['closest_km'] as num?)?.toDouble() ?? 0;
-      final count = (report['report_count'] as num?)?.toInt() ?? 1;
-
-      final angle = (disease.hashCode % 360) * (3.14159 / 180);
-      final distanceRatio = (closest / radiusKm).clamp(0.05, 1.0);
-      final dist = maxRadius * distanceRatio;
-
-      final dotCenter = Offset(
-        center.dx + dist * cosApprox(angle),
-        center.dy + dist * sinApprox(angle),
-      );
-
-      final dotRadius = 6.0 + (count.clamp(1, 8) * 1.2);
-      final dotPaint = Paint()..color = colorFor(disease).withValues(alpha: 0.85);
-      canvas.drawCircle(dotCenter, dotRadius, dotPaint);
-      canvas.drawCircle(
-        dotCenter,
-        dotRadius,
-        Paint()
-          ..color = Colors.white
-          ..style = PaintingStyle.stroke
-          ..strokeWidth = 1.5,
-      );
-    }
-  }
-
-  // Lightweight trig without importing dart:math at the top (kept local
-  // for clarity in this painter).
-  double cosApprox(double radians) => _cos(radians);
-  double sinApprox(double radians) => _sin(radians);
-
-  @override
-  bool shouldRepaint(covariant _RadarPainter oldDelegate) =>
-      oldDelegate.reports != reports || oldDelegate.radiusKm != radiusKm;
-}
-
-// Simple wrappers so the painter above reads cleanly.
-double _cos(double radians) => math.cos(radians);
-double _sin(double radians) => math.sin(radians);
 
 class _DotGridPainter extends CustomPainter {
   @override
