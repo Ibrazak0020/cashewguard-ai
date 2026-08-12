@@ -1,4 +1,4 @@
-// ignore_for_file: deprecated_member_use, avoid_print, depend_on_referenced_packages
+// ignore_for_file: avoid_print, depend_on_referenced_packages
 
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'package:geolocator/geolocator.dart';
@@ -172,10 +172,10 @@ class ScanService {
   // ✅ AI: Outbreak awareness
   // ============================================
 
-  /// Fetches nearby disease reports from OTHER farmers within
-  /// [radiusKm] over the last [days] days, using the device's current
-  /// location. Returns aggregate counts only — never individual scans
-  /// or other farmers' identities/exact locations.
+  /// Fetches individual disease report positions from OTHER farmers
+  /// within [radiusKm] over the last [days] days, using the device's
+  /// current location. Positions are real (rounded to ~1km precision at
+  /// scan time) — never exact — and user identity is never included.
   Future<List<Map<String, dynamic>>> getNearbyOutbreaks({
     double radiusKm = 15,
     int days = 14,
@@ -186,7 +186,7 @@ class ScanService {
           'Location unavailable — enable location access to see nearby outbreaks.');
     }
 
-    final response = await _supabase.rpc('get_nearby_disease_reports', params: {
+    final response = await _supabase.rpc('get_nearby_disease_points', params: {
       'p_lat': location.$1,
       'p_lng': location.$2,
       'p_radius_km': radiusKm,

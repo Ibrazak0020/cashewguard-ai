@@ -1,4 +1,3 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -15,10 +14,11 @@ class OutbreakScreen extends StatefulWidget {
 class _OutbreakScreenState extends State<OutbreakScreen> {
   final _scanService = ScanService();
   static const _green = Color(0xFF0D631B);
+  static const _distanceCalc = Distance();
 
   bool _isLoading = true;
   String? _error;
-  List<Map<String, dynamic>> _reports = [];
+  List<Map<String, dynamic>> _points = [];
   LatLng? _center;
   double _radiusKm = 15;
 
@@ -39,14 +39,14 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
         throw Exception(
             'Location unavailable — enable location access to see nearby outbreaks.');
       }
-      final reports = await _scanService.getNearbyOutbreaks(
+      final points = await _scanService.getNearbyOutbreaks(
         radiusKm: _radiusKm,
         days: 14,
       );
       if (!mounted) return;
       setState(() {
         _center = LatLng(location.$1, location.$2);
-        _reports = reports;
+        _points = points;
         _isLoading = false;
       });
     } catch (e) {
@@ -75,20 +75,29 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
     }
   }
 
-  LatLng _approximatePosition(String disease, double distanceKm) {
-    final center = _center!;
-    final angle = (disease.hashCode % 360) * (math.pi / 180);
-    final dLat = (distanceKm / 111.0) * math.cos(angle);
-    final dLng = (distanceKm /
-            (111.0 * math.cos(center.latitude * math.pi / 180))) *
-        math.sin(angle);
-    return LatLng(center.latitude + dLat, center.longitude + dLng);
-  }
-
-  double get _zoomForRadius {
-    if (_radiusKm <= 10) return 12.2;
-    if (_radiusKm <= 15) return 11.6;
-    return 10.6;
+  // Aggregates the raw points (real, per-scan positions) into per-disease
+  // summary stats (count + closest distance) for the summary card and list.
+  List<Map<String, dynamic>> get _aggregatedReports {
+    final Map<String, List<LatLng>> byDisease = {};
+    for (final p in _points) {
+      final disease = (p['disease_name'] ?? '').toString();
+      final lat = (p['latitude'] as num).toDouble();
+      final lng = (p['longitude'] as num).toDouble();
+      byDisease.putIfAbsent(disease, () => []).add(LatLng(lat, lng));
+    }
+    final result = byDisease.entries.map((e) {
+      final closestMeters = e.value
+          .map((pt) => _distanceCalc.as(LengthUnit.Kilometer, _center!, pt))
+          .reduce((a, b) => a < b ? a : b);
+      return {
+        'disease_name': e.key,
+        'report_count': e.value.length,
+        'closest_km': double.parse(closestMeters.toStringAsFixed(1)),
+      };
+    }).toList();
+    result.sort((a, b) =>
+        (b['report_count'] as int).compareTo(a['report_count'] as int));
+    return result;
   }
 
   @override
@@ -188,10 +197,9 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
   }
 
   Widget _buildContent() {
-    final mostCommon = _reports.isNotEmpty
-        ? (_reports..sort((a, b) =>
-                (b['report_count'] as num).compareTo(a['report_count'] as num)))
-            .first['disease_name'] as String
+    final aggregated = _aggregatedReports;
+    final mostCommon = aggregated.isNotEmpty
+        ? aggregated.first['disease_name'] as String
         : null;
 
     return SingleChildScrollView(
@@ -200,7 +208,7 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text(
-            _reports.isEmpty
+            _points.isEmpty
                 ? "No disease reports from nearby farmers in the last 2 weeks — looking clear."
                 : "Here's what nearby farmers have reported in the last 2 weeks.",
             style: GoogleFonts.inter(
@@ -234,7 +242,9 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
             child: FlutterMap(
               options: MapOptions(
                 initialCenter: _center!,
-                initialZoom: _zoomForRadius,
+                initialZoom: _radiusKm <= 10
+                    ? 12.2
+                    : (_radiusKm <= 15 ? 11.6 : 10.6),
                 interactionOptions: const InteractionOptions(
                   flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
                 ),
@@ -279,38 +289,36 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
                             color: Colors.white, size: 18),
                       ),
                     ),
-                    ..._reports.map((report) {
-                      final disease =
-                          (report['disease_name'] ?? '').toString();
-                      final closest =
-                          (report['closest_km'] as num?)?.toDouble() ?? 0;
-                      final count =
-                          (report['report_count'] as num?)?.toInt() ?? 1;
+                    // ✅ AI: real (privacy-rounded) positions — one
+                    // pulsing marker per actual report, not a fake angle.
+                    ..._points.map((p) {
+                      final disease = (p['disease_name'] ?? '').toString();
+                      final lat = (p['latitude'] as num).toDouble();
+                      final lng = (p['longitude'] as num).toDouble();
                       final color = _diseaseColor(disease);
-                      final size = 32.0 + (count.clamp(1, 8) * 2);
                       return Marker(
-                        point: _approximatePosition(disease, closest),
-                        width: size,
-                        height: size,
+                        point: LatLng(lat, lng),
+                        width: 40,
+                        height: 40,
                         child: GestureDetector(
-                          onTap: () => _showReportDetail(
-                              context, disease, count, closest, color),
-                          child: Container(
-                            decoration: BoxDecoration(
-                              color: color.withValues(alpha: 0.85),
-                              shape: BoxShape.circle,
-                              border:
-                                  Border.all(color: Colors.white, width: 2),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: Colors.black.withValues(alpha: 0.25),
-                                  blurRadius: 6,
-                                ),
-                              ],
-                            ),
-                            child: const Icon(Icons.report_problem,
-                                color: Colors.white, size: 16),
-                          ),
+                          onTap: () {
+                            final agg = _aggregatedReports.firstWhere(
+                              (r) => r['disease_name'] == disease,
+                              orElse: () => {
+                                'disease_name': disease,
+                                'report_count': 1,
+                                'closest_km': 0.0,
+                              },
+                            );
+                            _showReportDetail(
+                              context,
+                              disease,
+                              agg['report_count'] as int,
+                              agg['closest_km'] as double,
+                              color,
+                            );
+                          },
+                          child: _PulsingMarker(color: color),
                         ),
                       );
                     }),
@@ -330,7 +338,7 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
 
           const SizedBox(height: 20),
 
-          if (_reports.isNotEmpty) ...[
+          if (aggregated.isNotEmpty) ...[
             Text(
               'Nearby reports',
               style: GoogleFonts.manrope(
@@ -340,7 +348,7 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
               ),
             ),
             const SizedBox(height: 12),
-            ..._reports.map(_buildReportCard),
+            ...aggregated.map(_buildReportCard),
           ],
         ],
       ),
@@ -574,7 +582,7 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                'Reports are anonymous — exact farm locations are never shown, only aggregate counts. Map markers show an approximate distance, not an exact position.',
+                'Marker positions are real but rounded to roughly 1km for privacy — exact farm locations and farmer identities are never shown.',
                 style: GoogleFonts.inter(
                   fontSize: 12,
                   color: const Color(0xFF40493D).withValues(alpha: 0.7),
@@ -620,6 +628,74 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ✅ AI: pulsing/blinking marker to draw attention to active outbreaks.
+class _PulsingMarker extends StatefulWidget {
+  final Color color;
+  const _PulsingMarker({required this.color});
+
+  @override
+  State<_PulsingMarker> createState() => _PulsingMarkerState();
+}
+
+class _PulsingMarkerState extends State<_PulsingMarker>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _scaleAnim;
+  late final Animation<double> _opacityAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 900),
+    )..repeat(reverse: true);
+    _scaleAnim = Tween<double>(begin: 0.85, end: 1.25).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+    _opacityAnim = Tween<double>(begin: 0.6, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return Opacity(
+          opacity: _opacityAnim.value,
+          child: Transform.scale(
+            scale: _scaleAnim.value,
+            child: child,
+          ),
+        );
+      },
+      child: Container(
+        decoration: BoxDecoration(
+          color: widget.color.withValues(alpha: 0.9),
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2),
+          boxShadow: [
+            BoxShadow(
+              color: widget.color.withValues(alpha: 0.5),
+              blurRadius: 10,
+              spreadRadius: 2,
+            ),
+          ],
+        ),
+        child: const Icon(Icons.report_problem, color: Colors.white, size: 16),
       ),
     );
   }
