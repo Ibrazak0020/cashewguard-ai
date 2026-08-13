@@ -215,6 +215,20 @@ class PredictionService {
   Future<Map<String, dynamic>> _predictViaTflite(Uint8List imageBytes) async {
     try {
       _mobile ??= MobilePrediction();
+
+      // FIX: the real leaf_validator model was loaded but never actually
+      // called on this path -- only a confidence/entropy heuristic on the
+      // disease classifier's own output was used, which cannot reliably
+      // detect non-cashew images (a 5-class classifier will often confidently
+      // pick one of its 5 known classes even for an unrelated image, since
+      // it was never trained with a "none of these" option). Call the real
+      // validator FIRST, before running disease inference at all.
+      final isLeaf = await _mobile!.validateLeaf(imageBytes);
+      if (!isLeaf) {
+        print('❌ Leaf validator rejected image -- not a cashew leaf');
+        return _unrecognizedResult(0.0);
+      }
+
       final probabilities = await _mobile!.runInference(imageBytes);
 
       int predictedIndex = 0;
