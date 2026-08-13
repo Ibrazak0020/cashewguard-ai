@@ -75,8 +75,6 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
     }
   }
 
-  // Aggregates the raw points (real, per-scan positions) into per-disease
-  // summary stats (count + closest distance) for the summary card and list.
   List<Map<String, dynamic>> get _aggregatedReports {
     final Map<String, List<LatLng>> byDisease = {};
     for (final p in _points) {
@@ -161,6 +159,8 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
               color: _green,
             ),
           ),
+          const SizedBox(width: 10),
+          _LiveBadge(),
         ],
       ),
     );
@@ -175,7 +175,9 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             Icon(
-              isLocationIssue ? Icons.location_off_outlined : Icons.error_outline,
+              isLocationIssue
+                  ? Icons.location_off_outlined
+                  : Icons.error_outline,
               color: const Color(0xFFBA1A1A),
               size: 40,
             ),
@@ -219,128 +221,14 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
             ),
           ),
           const SizedBox(height: 16),
-
           _buildRadiusToggle(),
           const SizedBox(height: 20),
-
           if (mostCommon != null) _buildSummaryCard(mostCommon),
           if (mostCommon != null) const SizedBox(height: 20),
-
-          Container(
-            width: double.infinity,
-            height: 320,
-            clipBehavior: Clip.antiAlias,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: _green.withValues(alpha: 0.1),
-                  blurRadius: 20,
-                  offset: const Offset(0, 6),
-                ),
-              ],
-            ),
-            child: FlutterMap(
-              options: MapOptions(
-                initialCenter: _center!,
-                initialZoom: _radiusKm <= 10
-                    ? 12.2
-                    : (_radiusKm <= 15 ? 11.6 : 10.6),
-                interactionOptions: const InteractionOptions(
-                  flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
-                ),
-              ),
-              children: [
-                TileLayer(
-                  urlTemplate:
-                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                  userAgentPackageName: 'com.cashewguard.ai',
-                ),
-                CircleLayer(
-                  circles: [
-                    CircleMarker(
-                      point: _center!,
-                      radius: _radiusKm * 1000,
-                      useRadiusInMeter: true,
-                      color: _green.withValues(alpha: 0.06),
-                      borderColor: _green.withValues(alpha: 0.4),
-                      borderStrokeWidth: 1.5,
-                    ),
-                  ],
-                ),
-                MarkerLayer(
-                  markers: [
-                    Marker(
-                      point: _center!,
-                      width: 36,
-                      height: 36,
-                      child: Container(
-                        decoration: BoxDecoration(
-                          color: _green,
-                          shape: BoxShape.circle,
-                          border: Border.all(color: Colors.white, width: 3),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withValues(alpha: 0.25),
-                              blurRadius: 6,
-                            ),
-                          ],
-                        ),
-                        child: const Icon(Icons.person,
-                            color: Colors.white, size: 18),
-                      ),
-                    ),
-                    ..._points.map((p) {
-                      final disease = (p['disease_name'] ?? '').toString();
-                      final lat = (p['latitude'] as num).toDouble();
-                      final lng = (p['longitude'] as num).toDouble();
-                      final color = _diseaseColor(disease);
-                      return Marker(
-                        point: LatLng(lat, lng),
-                        width: 40,
-                        height: 40,
-                        child: GestureDetector(
-                          onTap: () {
-                            // ✅ FIX: explicit Map<String, dynamic> type on
-                            // the fallback literal — previously untyped,
-                            // which Dart inferred incompatibly and crashed
-                            // firstWhere's orElse at runtime.
-                            final agg = _aggregatedReports.firstWhere(
-                              (r) => r['disease_name'] == disease,
-                              orElse: () => <String, dynamic>{
-                                'disease_name': disease,
-                                'report_count': 1,
-                                'closest_km': 0.0,
-                              },
-                            );
-                            _showReportDetail(
-                              context,
-                              disease,
-                              agg['report_count'] as int,
-                              agg['closest_km'] as double,
-                              color,
-                            );
-                          },
-                          child: _PulsingMarker(color: color),
-                        ),
-                      );
-                    }),
-                  ],
-                ),
-                RichAttributionWidget(
-                  attributions: [
-                    TextSourceAttribution(
-                      'OpenStreetMap contributors',
-                      onTap: () {},
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
+          _buildMapCard(),
+          const SizedBox(height: 12),
+          _buildLegend(),
           const SizedBox(height: 20),
-
           if (aggregated.isNotEmpty) ...[
             Text(
               'Nearby reports',
@@ -355,6 +243,191 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
           ],
         ],
       ),
+    );
+  }
+
+  Widget _buildMapCard() {
+    return Container(
+      width: double.infinity,
+      height: 340,
+      clipBehavior: Clip.antiAlias,
+      decoration: BoxDecoration(
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: Colors.white, width: 3),
+        boxShadow: [
+          BoxShadow(
+            color: _green.withValues(alpha: 0.15),
+            blurRadius: 24,
+            offset: const Offset(0, 8),
+          ),
+        ],
+      ),
+      child: Stack(
+        children: [
+          FlutterMap(
+            options: MapOptions(
+              initialCenter: _center!,
+              initialZoom:
+                  _radiusKm <= 10 ? 12.2 : (_radiusKm <= 15 ? 11.6 : 10.6),
+              interactionOptions: const InteractionOptions(
+                flags: InteractiveFlag.pinchZoom | InteractiveFlag.drag,
+              ),
+            ),
+            children: [
+              // ✅ CartoDB Voyager tiles — free, no API key, no billing
+              // account required. Cleaner, more modern styling than
+              // plain OpenStreetMap raster tiles.
+              TileLayer(
+                urlTemplate:
+                    'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+                subdomains: const ['a', 'b', 'c', 'd'],
+                userAgentPackageName: 'com.cashewguard.ai',
+              ),
+              CircleLayer(
+                circles: [
+                  CircleMarker(
+                    point: _center!,
+                    radius: _radiusKm * 1000,
+                    useRadiusInMeter: true,
+                    color: _green.withValues(alpha: 0.07),
+                    borderColor: _green.withValues(alpha: 0.45),
+                    borderStrokeWidth: 1.5,
+                  ),
+                ],
+              ),
+              MarkerLayer(
+                markers: [
+                  Marker(
+                    point: _center!,
+                    width: 38,
+                    height: 38,
+                    child: Container(
+                      decoration: BoxDecoration(
+                        color: _green,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 3),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withValues(alpha: 0.25),
+                            blurRadius: 8,
+                          ),
+                        ],
+                      ),
+                      child: const Icon(Icons.person,
+                          color: Colors.white, size: 19),
+                    ),
+                  ),
+                  ..._points.map((p) {
+                    final disease = (p['disease_name'] ?? '').toString();
+                    final lat = (p['latitude'] as num).toDouble();
+                    final lng = (p['longitude'] as num).toDouble();
+                    final color = _diseaseColor(disease);
+                    return Marker(
+                      point: LatLng(lat, lng),
+                      width: 40,
+                      height: 40,
+                      child: GestureDetector(
+                        onTap: () {
+                          final agg = _aggregatedReports.firstWhere(
+                            (r) => r['disease_name'] == disease,
+                            orElse: () => <String, dynamic>{
+                              'disease_name': disease,
+                              'report_count': 1,
+                              'closest_km': 0.0,
+                            },
+                          );
+                          _showReportDetail(
+                            context,
+                            disease,
+                            agg['report_count'] as int,
+                            agg['closest_km'] as double,
+                            color,
+                          );
+                        },
+                        child: _PulsingMarker(color: color),
+                      ),
+                    );
+                  }),
+                ],
+              ),
+              RichAttributionWidget(
+                attributions: [
+                  TextSourceAttribution(
+                    '© OpenStreetMap © CARTO',
+                    onTap: () {},
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          // Floating live-stats pill, top-left
+          Positioned(
+            top: 14,
+            left: 14,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: Colors.white.withValues(alpha: 0.95),
+                borderRadius: BorderRadius.circular(999),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.12),
+                    blurRadius: 10,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.groups_2_outlined, color: _green, size: 15),
+                  const SizedBox(width: 6),
+                  Text(
+                    '${_points.length} report${_points.length == 1 ? '' : 's'} within ${_radiusKm.toInt()}km',
+                    style: GoogleFonts.manrope(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: const Color(0xFF191C1B),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildLegend() {
+    final diseases = ['Anthracnose', 'Gumosis', 'Leaf Miner', 'Red Rust'];
+    return Wrap(
+      spacing: 14,
+      runSpacing: 8,
+      children: diseases.map((d) {
+        return Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: _diseaseColor(d),
+                shape: BoxShape.circle,
+              ),
+            ),
+            const SizedBox(width: 6),
+            Text(
+              d,
+              style: GoogleFonts.inter(
+                fontSize: 11,
+                color: const Color(0xFF40493D),
+              ),
+            ),
+          ],
+        );
+      }).toList(),
     );
   }
 
@@ -488,7 +561,8 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
                 color: color.withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(14),
               ),
-              child: Icon(Icons.report_problem_outlined, color: color, size: 22),
+              child:
+                  Icon(Icons.report_problem_outlined, color: color, size: 22),
             ),
             const SizedBox(width: 14),
             Expanded(
@@ -631,6 +705,75 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ✅ Small pulsing "LIVE" badge to reinforce that this reflects real
+// community data, not static content.
+class _LiveBadge extends StatefulWidget {
+  @override
+  State<_LiveBadge> createState() => _LiveBadgeState();
+}
+
+class _LiveBadgeState extends State<_LiveBadge>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller;
+  late final Animation<double> _opacity;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+    _opacity = Tween<double>(begin: 0.4, end: 1.0).animate(_controller);
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFFBA1A1A).withValues(alpha: 0.1),
+        borderRadius: BorderRadius.circular(999),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          AnimatedBuilder(
+            animation: _opacity,
+            builder: (context, child) => Opacity(
+              opacity: _opacity.value,
+              child: Container(
+                width: 6,
+                height: 6,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFBA1A1A),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(width: 4),
+          Text(
+            'LIVE',
+            style: GoogleFonts.jetBrainsMono(
+              fontSize: 9,
+              fontWeight: FontWeight.w700,
+              color: const Color(0xFFBA1A1A),
+              letterSpacing: 1,
+            ),
+          ),
+        ],
       ),
     );
   }
