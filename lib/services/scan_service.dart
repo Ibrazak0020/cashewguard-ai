@@ -29,8 +29,8 @@ class ScanService {
     // ✅ AI: capture coarse location for outbreak awareness. Rounded to
     // ~1km precision (2 decimal places) before it ever leaves the
     // device — we never store or transmit exact coordinates, and
-    // get_nearby_disease_reports() only ever returns aggregate counts,
-    // never individual locations.
+    // get_nearby_disease_points() only ever returns already-rounded
+    // positions, never a user identity.
     final location = await _getRoundedLocation();
 
     try {
@@ -66,16 +66,16 @@ class ScanService {
     }
   }
 
-  /// Gets the device's current location, rounded to ~1km precision for
-  /// privacy, or null if location isn't available/permitted, or if the
-  /// farmer has turned off location sharing in Privacy Settings. Never
-  /// throws — a scan should still save even if location fails.
   /// Public wrapper so screens (e.g. the Outbreak Watch map) can center
   /// on the farmer's own approximate location without duplicating the
   /// permission/rounding logic.
   Future<(double, double)?> getCurrentRoundedLocation() =>
       _getRoundedLocation();
 
+  /// Gets the device's current location, rounded to ~1km precision for
+  /// privacy, or null if location isn't available/permitted, or if the
+  /// farmer has turned off location sharing in Privacy Settings. Never
+  /// throws — a scan should still save even if location fails.
   Future<(double, double)?> _getRoundedLocation() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -96,8 +96,13 @@ class ScanService {
       final serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) return null;
 
+      // ✅ FIX: bumped from LocationAccuracy.low to .high — the ~1km
+      // rounding below already handles privacy, so there's no reason to
+      // also degrade the raw GPS reading itself. "low" accuracy can be
+      // off by hundreds of meters to multiple km on its own, which was
+      // stacking with the rounding and making positions noticeably wrong.
       final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.low,
+        desiredAccuracy: LocationAccuracy.high,
       );
 
       // Round to 2 decimal places (~1.1km) — coarse enough to protect

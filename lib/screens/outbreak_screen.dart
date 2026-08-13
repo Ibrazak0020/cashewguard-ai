@@ -85,16 +85,17 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
       final lng = (p['longitude'] as num).toDouble();
       byDisease.putIfAbsent(disease, () => []).add(LatLng(lat, lng));
     }
-    final result = byDisease.entries.map((e) {
-      final closestMeters = e.value
+    final result = <Map<String, dynamic>>[];
+    byDisease.forEach((disease, points) {
+      final closestKm = points
           .map((pt) => _distanceCalc.as(LengthUnit.Kilometer, _center!, pt))
           .reduce((a, b) => a < b ? a : b);
-      return {
-        'disease_name': e.key,
-        'report_count': e.value.length,
-        'closest_km': double.parse(closestMeters.toStringAsFixed(1)),
-      };
-    }).toList();
+      result.add(<String, dynamic>{
+        'disease_name': disease,
+        'report_count': points.length,
+        'closest_km': double.parse(closestKm.toStringAsFixed(1)),
+      });
+    });
     result.sort((a, b) =>
         (b['report_count'] as int).compareTo(a['report_count'] as int));
     return result;
@@ -289,8 +290,6 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
                             color: Colors.white, size: 18),
                       ),
                     ),
-                    // ✅ AI: real (privacy-rounded) positions — one
-                    // pulsing marker per actual report, not a fake angle.
                     ..._points.map((p) {
                       final disease = (p['disease_name'] ?? '').toString();
                       final lat = (p['latitude'] as num).toDouble();
@@ -302,9 +301,13 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
                         height: 40,
                         child: GestureDetector(
                           onTap: () {
+                            // ✅ FIX: explicit Map<String, dynamic> type on
+                            // the fallback literal — previously untyped,
+                            // which Dart inferred incompatibly and crashed
+                            // firstWhere's orElse at runtime.
                             final agg = _aggregatedReports.firstWhere(
                               (r) => r['disease_name'] == disease,
-                              orElse: () => {
+                              orElse: () => <String, dynamic>{
                                 'disease_name': disease,
                                 'report_count': 1,
                                 'closest_km': 0.0,
@@ -633,7 +636,6 @@ class _OutbreakScreenState extends State<OutbreakScreen> {
   }
 }
 
-// ✅ AI: pulsing/blinking marker to draw attention to active outbreaks.
 class _PulsingMarker extends StatefulWidget {
   final Color color;
   const _PulsingMarker({required this.color});
