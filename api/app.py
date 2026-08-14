@@ -36,6 +36,32 @@ DISPLAY_NAMES = {
 VALIDATOR_THRESHOLD = 0.3
 
 # ============================================
+# FAST PRE-FILTER: rejects screenshots/charts/documents/UI images
+# BEFORE the ML validator even runs. No retraining needed.
+#
+# Why this is needed: the leaf validator was trained only on real
+# photographs (cashew leaves + other-plant leaves), so it has never
+# seen a screenshot, chart, or document and its behavior on one is
+# essentially undefined. Real camera photos have high pixel-color
+# diversity (natural noise/gradients); screenshots and charts use
+# large areas of flat, identical color and often large white margins.
+# This catches that specific failure mode cheaply and immediately.
+# ============================================
+def looks_photographic(img_rgb_full_res, min_diversity=0.12, max_white_ratio=0.35):
+    small = cv2.resize(img_rgb_full_res, (100, 100))
+    total_pixels = 100 * 100
+
+    pixels = small.reshape(-1, 3)
+    unique_colors = len(np.unique(pixels, axis=0))
+    color_diversity_ratio = unique_colors / total_pixels
+
+    near_white = np.all(small > 245, axis=-1)
+    white_ratio = float(np.sum(near_white)) / total_pixels
+
+    is_photographic = (color_diversity_ratio > min_diversity) and (white_ratio < max_white_ratio)
+    return is_photographic, color_diversity_ratio, white_ratio
+
+# ============================================
 # LOAD DISEASE MODEL
 # ============================================
 interpreter = None
@@ -243,6 +269,19 @@ def validate():
         if img_array is None:
             return jsonify({'error': 'Failed to process image'}), 400
 
+        # Fast pre-filter: catches screenshots/charts/documents before
+        # the ML validator runs at all.
+        is_photo, diversity, white_ratio = looks_photographic(full_res_array)
+        print(f'📷 Photographic check: diversity={diversity:.3f} white_ratio={white_ratio:.3f} is_photo={is_photo}')
+        if not is_photo:
+            return jsonify({
+                'is_leaf':    False,
+                'confidence': 0.0,
+                'reason':     'not_a_photo',
+                'message':    'This does not look like a photo of a leaf. '
+                              'Please upload a clear camera photo of a cashew leaf.',
+            })
+
         confidence = run_validator(img_array)
 
         if confidence is None:
@@ -322,6 +361,24 @@ def predict():
         img_array, full_res_array = preprocess_image(data['image'])
         if img_array is None:
             return jsonify({'error': 'Failed to process image'}), 400
+
+        # Step 1b: Fast pre-filter -- catches screenshots/charts/documents
+        # before the disease classifier or ML validator even run.
+        is_photo, diversity, white_ratio = looks_photographic(full_res_array)
+        print(f'📷 Photographic check: diversity={diversity:.3f} white_ratio={white_ratio:.3f} is_photo={is_photo}')
+        if not is_photo:
+            return jsonify({
+                'success':         False,
+                'disease':         'Unrecognized',
+                'disease_key':     'unrecognized',
+                'confidence':      0.0,
+                'severity':        'Unknown',
+                'infected_area':   0.0,
+                'all_predictions': {},
+                'reason':          'not_a_photo',
+                'message':         'This does not look like a photo of a leaf. '
+                                    'Please upload a clear camera photo of a cashew leaf.',
+            })
 
         # Step 2: Run disease prediction
         predictions = run_prediction(img_array)

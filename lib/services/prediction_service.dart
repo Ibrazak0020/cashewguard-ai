@@ -10,6 +10,7 @@ import 'package:http/http.dart' as http;
 import 'package:image/image.dart' as img;
 
 import 'severity_estimator.dart';
+import 'photo_filter.dart';
 
 // Only import tflite on mobile — never on web
 import 'prediction_service_mobile.dart'
@@ -28,8 +29,8 @@ class PredictionService {
   // through easily -- which could look like "only red_rust ever shows up"
   // from the user's side even with a fixed, well-calibrated model.
   // Test with real photos across all 5 classes before finalizing these.
-  static const double _minConfidence = 0.70;
-  static const double _maxEntropy = 1.8;
+  static const double _minConfidence = 0.75;
+  static const double _maxEntropy = 1.5;
 
   static const int _maxRetries = 3;
   static const Duration _retryDelay = Duration(seconds: 5);
@@ -99,7 +100,7 @@ class PredictionService {
     final entropy = _calculateEntropy(probabilities);
     print('🔍 Entropy: ${entropy.toStringAsFixed(3)} (max: $_maxEntropy)');
 
-    if (entropy > _maxEntropy) {
+    if (entropy >= _maxEntropy) {
       print(
           '⚠️ High entropy ${entropy.toStringAsFixed(3)} — not a cashew leaf');
       return _unrecognizedResult(maxProb);
@@ -215,6 +216,23 @@ class PredictionService {
   Future<Map<String, dynamic>> _predictViaTflite(Uint8List imageBytes) async {
     try {
       _mobile ??= MobilePrediction();
+
+      // Fast pre-filter: catches screenshots/charts/documents before
+      // the ML validator or disease classifier run at all. No retraining
+      // needed -- targets the specific failure mode of non-photographic
+      // images the validator was never trained to recognize.
+      final img.Image? decodedForCheck = img.decodeImage(imageBytes);
+      if (decodedForCheck != null) {
+        final photoCheck = looksPhotographic(decodedForCheck);
+        print(
+            '📷 Photographic check: diversity=${photoCheck.colorDiversityRatio.toStringAsFixed(3)} '
+            'white_ratio=${photoCheck.whiteRatio.toStringAsFixed(3)} '
+            'is_photo=${photoCheck.isPhotographic}');
+        if (!photoCheck.isPhotographic) {
+          print('❌ Pre-filter rejected image -- not a photo of a leaf');
+          return _unrecognizedResult(0.0);
+        }
+      }
 
       // FIX: the real leaf_validator model was loaded but never actually
       // called on this path -- only a confidence/entropy heuristic on the
