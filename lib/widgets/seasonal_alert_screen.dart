@@ -1,46 +1,53 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
-import '../data/disease_seasonality.dart';
+import '../services/weather_service.dart';
+import '../data/disease_risk_predictor.dart';
 
-/// Shows a full-screen "ad-style" seasonal disease alert every time the
-/// app opens, if any disease is currently in its peak or elevated risk
-/// window. Call [SeasonalAlertScreen.maybeShow] from the Dashboard after
-/// first build.
+/// Shows a full-screen "ad-style" disease risk alert every time the app
+/// opens, predicted from the farmer's LIVE weather conditions (for the
+/// three moisture-driven diseases) with a calendar-based fallback when
+/// weather can't be fetched.
 class SeasonalAlertScreen extends StatelessWidget {
-  final DiseaseSeasonality disease;
-  final bool isPeak;
+  final LiveDiseaseRisk risk;
+  final bool isLive;
 
   const SeasonalAlertScreen({
     super.key,
-    required this.disease,
-    required this.isPeak,
+    required this.risk,
+    required this.isLive,
   });
 
   static const _green = Color(0xFF0D631B);
 
-  // ✅ AI: in-memory flag (not persisted) — resets on app cold start, but
-  // stays true for the rest of the session so navigating back to the
-  // Dashboard doesn't re-trigger the check.
   static bool _hasCheckedThisSession = false;
 
-  /// Shows the seasonal alert for the highest-priority disease currently
-  /// in season (peak takes priority over elevated), once per app launch.
-  /// No-op if nothing is in season, or if already checked this session.
   static Future<void> maybeShow(BuildContext context) async {
     if (_hasCheckedThisSession) return;
     _hasCheckedThisSession = true;
 
-    final peak = DiseaseSeasonality.peakFor();
-    final elevated = DiseaseSeasonality.elevatedFor();
+    List<LiveDiseaseRisk> risks;
+    bool isLive = true;
+    try {
+      final advisory = await WeatherService().getSprayAdvisory();
+      risks = DiseaseRiskPredictor.predict(
+        temperature: advisory.temperature,
+        humidity: advisory.humidity,
+        rainChance: advisory.rainChance,
+      );
+    } catch (_) {
+      isLive = false;
+      risks = DiseaseRiskPredictor.predictFromCalendarOnly();
+    }
 
-    DiseaseSeasonality? target;
-    bool isPeak = true;
+    final peak = risks.where((r) => r.level == RiskLevel.peak).toList();
+    final elevated =
+        risks.where((r) => r.level == RiskLevel.elevated).toList();
+
+    LiveDiseaseRisk? target;
     if (peak.isNotEmpty) {
       target = peak.first;
-      isPeak = true;
     } else if (elevated.isNotEmpty) {
       target = elevated.first;
-      isPeak = false;
     }
 
     if (target == null) return;
@@ -51,7 +58,7 @@ class SeasonalAlertScreen extends StatelessWidget {
         opaque: false,
         barrierColor: Colors.black.withValues(alpha: 0.6),
         pageBuilder: (_, __, ___) =>
-            SeasonalAlertScreen(disease: target!, isPeak: isPeak),
+            SeasonalAlertScreen(risk: target!, isLive: isLive),
         transitionsBuilder: (_, animation, __, child) => FadeTransition(
           opacity: animation,
           child: child,
@@ -60,8 +67,9 @@ class SeasonalAlertScreen extends StatelessWidget {
     );
   }
 
+  bool get _isPeak => risk.level == RiskLevel.peak;
   Color get _riskColor =>
-      isPeak ? const Color(0xFFBA1A1A) : const Color(0xFFE65100);
+      _isPeak ? const Color(0xFFBA1A1A) : const Color(0xFFE65100);
 
   @override
   Widget build(BuildContext context) {
@@ -87,25 +95,57 @@ class SeasonalAlertScreen extends StatelessWidget {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                // Badge
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                  decoration: BoxDecoration(
-                    color: _riskColor.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(999),
-                  ),
-                  child: Text(
-                    isPeak ? 'PEAK RISK SEASON' : 'ELEVATED RISK',
-                    style: GoogleFonts.jetBrainsMono(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: _riskColor,
-                      letterSpacing: 1,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: _riskColor.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text(
+                        _isPeak ? 'PEAK RISK NOW' : 'ELEVATED RISK',
+                        style: GoogleFonts.jetBrainsMono(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: _riskColor,
+                          letterSpacing: 1,
+                        ),
+                      ),
                     ),
-                  ),
+                    if (isLive) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: _green.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(999),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.wb_cloudy_outlined,
+                                size: 12, color: _green),
+                            const SizedBox(width: 4),
+                            Text(
+                              'LIVE WEATHER',
+                              style: GoogleFonts.jetBrainsMono(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w700,
+                                color: _green,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
                 const SizedBox(height: 20),
-
                 Container(
                   width: 72,
                   height: 72,
@@ -119,9 +159,8 @@ class SeasonalAlertScreen extends StatelessWidget {
                       color: Colors.white, size: 36),
                 ),
                 const SizedBox(height: 20),
-
                 Text(
-                  '${disease.diseaseName} season',
+                  '${risk.diseaseName} risk',
                   textAlign: TextAlign.center,
                   style: GoogleFonts.manrope(
                     fontSize: 22,
@@ -130,9 +169,8 @@ class SeasonalAlertScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 12),
-
                 Text(
-                  disease.reason,
+                  risk.reason,
                   textAlign: TextAlign.center,
                   style: GoogleFonts.inter(
                     fontSize: 14,
@@ -141,7 +179,6 @@ class SeasonalAlertScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 16),
-
                 Container(
                   width: double.infinity,
                   padding: const EdgeInsets.all(14),
@@ -157,7 +194,7 @@ class SeasonalAlertScreen extends StatelessWidget {
                       const SizedBox(width: 10),
                       Expanded(
                         child: Text(
-                          disease.tip,
+                          risk.tip,
                           style: GoogleFonts.inter(
                             fontSize: 13,
                             color: _green,
@@ -169,16 +206,12 @@ class SeasonalAlertScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 24),
-
                 SizedBox(
                   width: double.infinity,
                   child: ElevatedButton(
                     onPressed: () {
                       Navigator.pop(context);
-                      Navigator.pushNamed(
-                        context,
-                        '/scan',
-                      );
+                      Navigator.pushNamed(context, '/scan');
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: _green,
@@ -199,7 +232,6 @@ class SeasonalAlertScreen extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(height: 10),
-
                 TextButton(
                   onPressed: () => Navigator.pop(context),
                   child: Text(
