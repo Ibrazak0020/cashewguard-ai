@@ -47,7 +47,7 @@ class DiseaseRiskPredictor {
       diseaseName: 'Anthracnose',
       level: _levelFor(anthracnoseScore, peakAt: 70, elevatedAt: 40),
       reason:
-          'Current conditions — ${temperature.toStringAsFixed(0)}°C, $humidity% humidity${rainChance > 0.4 ? ', rain likely' : ''} — favor Anthracnose spread.',
+          'Current conditions: ${temperature.toStringAsFixed(0)}°C, $humidity% humidity${rainChance > 0.4 ? ', rain likely' : ''} — favor Anthracnose spread.',
       tip: 'Inspect leaves and young shoots this week. Remove infected material and improve airflow around trees.',
     ));
 

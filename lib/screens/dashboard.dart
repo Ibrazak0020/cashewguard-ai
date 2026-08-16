@@ -1,4 +1,5 @@
 // ignore_for_file: avoid_print, unused_local_variable, deprecated_member_use
+import 'dart:async';
 import '../utils/theme_helper.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -8,6 +9,7 @@ import '../l10n/app_localizations.dart';
 import '../services/weather_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/seasonal_alert_screen.dart';
+import '../data/disease_risk_predictor.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class Dashboard extends StatefulWidget {
@@ -37,7 +39,11 @@ class _DashboardState extends State<Dashboard> {
   bool _showAiHint = false;
   static const _aiHintDismissedKey = 'ai_assistant_hint_dismissed';
 
-  @override
+  // ✅ AI: idle-triggered weather risk push notification
+  Timer? _weatherRiskTimer;
+  static const _weatherRiskNotificationDateKey = 'weather_risk_notification_date';
+
+ @override
   void initState() {
     super.initState();
     _loadDashboardData();
@@ -48,6 +54,60 @@ class _DashboardState extends State<Dashboard> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) SeasonalAlertScreen.maybeShow(context);
     });
+    // ✅ AI: if the farmer stays idle on the Dashboard for a while
+    // (doesn't navigate away), send a real push notification with a
+    // live weather-based disease risk prediction — a background-style
+    // nudge, not just the immediate in-app alert above.
+    _weatherRiskTimer = Timer(
+      const Duration(seconds: 45),
+      _maybeShowWeatherRiskNotification,
+    );
+  }
+
+  @override
+  void dispose() {
+    _weatherRiskTimer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _maybeShowWeatherRiskNotification() async {
+    if (!mounted) return;
+
+    final prefs = await SharedPreferences.getInstance();
+    final today = DateTime.now().toIso8601String().substring(0, 10);
+    final lastShown = prefs.getString(_weatherRiskNotificationDateKey);
+    if (lastShown == today) return; // already nudged once today
+
+    List<LiveDiseaseRisk> risks;
+    try {
+      final advisory = await _weatherService.getSprayAdvisory();
+      risks = DiseaseRiskPredictor.predict(
+        temperature: advisory.temperature,
+        humidity: advisory.humidity,
+        rainChance: advisory.rainChance,
+      );
+    } catch (_) {
+      // No weather available — skip silently rather than nag with a
+      // notification built on stale/generic data.
+      return;
+    }
+
+    final peak = risks.where((r) => r.level == RiskLevel.peak).toList();
+    final elevated = risks.where((r) => r.level == RiskLevel.elevated).toList();
+    final target = peak.isNotEmpty
+        ? peak.first
+        : (elevated.isNotEmpty ? elevated.first : null);
+    if (target == null) return;
+
+    await prefs.setString(_weatherRiskNotificationDateKey, today);
+    await NotificationService().requestPermission();
+    await NotificationService().showNotification(
+      id: 200,
+      title: target.level == RiskLevel.peak
+          ? '${target.diseaseName} risk is high today'
+          : '${target.diseaseName} risk is rising today',
+      body: '${target.reason} Tap to open CashewGuard AI.',
+    );
   }
 
   Future<void> _loadAiHintState() async {
@@ -213,7 +273,6 @@ class _DashboardState extends State<Dashboard> {
         child: ClipOval(
           child: avatarUrl.isNotEmpty
               ? Image.network(
-                  // ✅ Cache-bust so image always refreshes
                   '$avatarUrl?t=${DateTime.now().millisecondsSinceEpoch ~/ 60000}',
                   fit: BoxFit.cover,
                   width: 40,
@@ -413,7 +472,6 @@ class _DashboardState extends State<Dashboard> {
                     children: [
                       Row(
                         children: [
-                          // ✅ Changed from gradient icon to image asset
                           ClipRRect(
                             borderRadius: BorderRadius.circular(10),
                             child: Image.asset(
@@ -434,10 +492,8 @@ class _DashboardState extends State<Dashboard> {
                           ),
                         ],
                       ),
-                      // ✅ Avatar shows profile photo, navigates to profile
                       Row(
                         children: [
-                          // ✅ AI: general-purpose assistant button
                           GestureDetector(
                             onTap: () =>
                                 Navigator.pushNamed(context, '/ai-assistant'),
@@ -493,7 +549,6 @@ class _DashboardState extends State<Dashboard> {
                   ),
                 ),
 
-                // ✅ AI: one-time hint pointing at the new AI chat icon
                 if (_showAiHint)
                   Padding(
                     padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
@@ -544,7 +599,6 @@ class _DashboardState extends State<Dashboard> {
                     ),
                   ),
 
-                // Scrollable content
                 Expanded(
                   child: RefreshIndicator(
                     onRefresh: _loadDashboardData,
@@ -555,7 +609,6 @@ class _DashboardState extends State<Dashboard> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Welcome banner
                           Container(
                             width: double.infinity,
                             padding: const EdgeInsets.all(24),
@@ -586,7 +639,6 @@ class _DashboardState extends State<Dashboard> {
                                         CrossAxisAlignment.start,
                                     children: [
                                       Text(
-                                        // ✅ Dynamic greeting
                                         _greeting(l10n),
                                         style: GoogleFonts.inter(
                                           fontSize: 14,
@@ -633,14 +685,12 @@ class _DashboardState extends State<Dashboard> {
                             ),
                           ),
 
-                          const SizedBox(height: 24),
+                         const SizedBox(height: 24),
 
-                          // Weather advisory card
                           _buildWeatherCard(),
 
                           const SizedBox(height: 24),
 
-                          // Stats row
                           _isLoading
                               ? const Center(
                                   child: CircularProgressIndicator(
@@ -678,7 +728,6 @@ class _DashboardState extends State<Dashboard> {
 
                           const SizedBox(height: 24),
 
-                          // Quick scan button
                           GestureDetector(
                             onTap: () => Navigator.pushNamed(context, '/scan'),
                             child: Container(
@@ -758,7 +807,6 @@ class _DashboardState extends State<Dashboard> {
 
                           const SizedBox(height: 24),
 
-                          // Disease alert card
                           if (_diseaseCount > 0)
                             Container(
                               width: double.infinity,
@@ -832,7 +880,6 @@ class _DashboardState extends State<Dashboard> {
 
                           if (_diseaseCount > 0) const SizedBox(height: 24),
 
-                          // Quick actions
                           Text(
                             l10n.quickActions,
                             style: GoogleFonts.manrope(
@@ -877,7 +924,6 @@ class _DashboardState extends State<Dashboard> {
                                 onTap: () =>
                                     Navigator.pushNamed(context, '/treatment'),
                               ),
-                              // ✅ Trends dashboard — charts over time
                               _actionCard(
                                 icon: Icons.show_chart,
                                 label: 'Trends',
@@ -886,7 +932,6 @@ class _DashboardState extends State<Dashboard> {
                                 onTap: () =>
                                     Navigator.pushNamed(context, '/trends'),
                               ),
-                              // ✅ Outbreak Watch — nearby disease reports
                               _actionCard(
                                 icon: Icons.radar,
                                 label: 'Outbreak Watch',
@@ -910,7 +955,6 @@ class _DashboardState extends State<Dashboard> {
 
                           const SizedBox(height: 24),
 
-                          // Recent scans
                           Text(
                             l10n.recentScans,
                             style: GoogleFonts.manrope(
@@ -960,7 +1004,6 @@ class _DashboardState extends State<Dashboard> {
             ),
           ),
 
-          // Bottom Navigation Bar
           Positioned(
             bottom: 16,
             left: 20,
@@ -1074,14 +1117,12 @@ class _DashboardState extends State<Dashboard> {
   }
 
   Widget _recentScanItem(Map<String, dynamic> scan) {
-    // ✅ Safe type casting — same fix as history screen
     final disease = (scan['disease_name'] ?? 'Unknown').toString();
     final severity = (scan['severity'] ?? 'Unknown').toString();
     final createdAt = (scan['created_at'] ?? '').toString();
     final color = _getDiseaseColor(disease);
 
     return GestureDetector(
-      // ✅ AFTER — passes all scan data as arguments
       onTap: () => Navigator.pushNamed(
         context,
         '/diagnosis',
