@@ -1,8 +1,15 @@
 // ignore_for_file: deprecated_member_use
 
+import 'dart:io';
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:percent_indicator/percent_indicator.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
+import 'package:pdf/pdf.dart';
+import 'package:pdf/widgets.dart' as pw;
 import '../l10n/app_localizations.dart';
 import 'package:provider/provider.dart';
 import '../services/tts_service.dart';
@@ -27,6 +34,10 @@ class _PredictionResultState extends State<PredictionResult>
   late Animation<Offset> _slideAnim;
   final _ttsService = TtsService();
   bool _isSpeaking = false;
+
+  // ✅ AI: key for capturing the result card as an image to share
+  final GlobalKey _resultCardKey = GlobalKey();
+  bool _isSharing = false;
 
   String _disease = 'Unknown';
   String _severity = 'Unknown';
@@ -73,6 +84,257 @@ class _PredictionResultState extends State<PredictionResult>
     _controller.dispose();
     _ttsService.stop();
     super.dispose();
+  }
+
+  // ============================================
+  // ✅ AI: SHARE FUNCTIONALITY
+  // ============================================
+
+  void _showShareOptions() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFBFCABA),
+                  borderRadius: BorderRadius.circular(999),
+                ),
+              ),
+              const SizedBox(height: 20),
+              Text(
+                'Share Result',
+                style: GoogleFonts.manrope(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w700,
+                  color: const Color(0xFF191C1B),
+                ),
+              ),
+              const SizedBox(height: 20),
+              _shareOption(
+                icon: Icons.image_outlined,
+                label: 'Share as Image',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _shareAsImage();
+                },
+              ),
+              const SizedBox(height: 12),
+              _shareOption(
+                icon: Icons.picture_as_pdf_outlined,
+                label: 'Share as PDF',
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _shareAsPdf();
+                },
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _shareOption({
+    required IconData icon,
+    required String label,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        decoration: BoxDecoration(
+          color: const Color(0xFF0D631B).withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(
+            color: const Color(0xFF0D631B).withValues(alpha: 0.15),
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: const Color(0xFF0D631B), size: 22),
+            const SizedBox(width: 14),
+            Text(
+              label,
+              style: GoogleFonts.manrope(
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+                color: const Color(0xFF0D631B),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareAsImage() async {
+    if (_isSharing) return;
+    setState(() => _isSharing = true);
+    try {
+      final boundary = _resultCardKey.currentContext?.findRenderObject()
+          as RenderRepaintBoundary?;
+      if (boundary == null) throw Exception('Could not capture result card.');
+
+      final image = await boundary.toImage(pixelRatio: 3.0);
+      final byteData =
+          await image.toByteData(format: ui.ImageByteFormat.png);
+      final bytes = byteData!.buffer.asUint8List();
+
+      final dir = await getTemporaryDirectory();
+      final file = File(
+          '${dir.path}/cashewguard_result_${DateTime.now().millisecondsSinceEpoch}.png');
+      await file.writeAsBytes(bytes);
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text:
+            'My cashew leaf scan result from CashewGuard AI: $_disease ($_severity severity).',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not share image: $e',
+                style: GoogleFonts.inter(color: Colors.white)),
+            backgroundColor: const Color(0xFFBA1A1A),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSharing = false);
+    }
+  }
+
+  Future<void> _shareAsPdf() async {
+    if (_isSharing) return;
+    setState(() => _isSharing = true);
+    try {
+      final pdf = pw.Document();
+      final now = DateTime.now();
+      final dateStr =
+          '${now.day}/${now.month}/${now.year} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
+
+      pdf.addPage(
+        pw.Page(
+          pageFormat: PdfPageFormat.a4,
+          build: (context) => pw.Padding(
+            padding: const pw.EdgeInsets.all(32),
+            child: pw.Column(
+              crossAxisAlignment: pw.CrossAxisAlignment.start,
+              children: [
+                pw.Text(
+                  'CashewGuard AI',
+                  style: pw.TextStyle(
+                    fontSize: 22,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColor.fromHex('#0D631B'),
+                  ),
+                ),
+                pw.Text(
+                  'Leaf Scan Result',
+                  style: const pw.TextStyle(fontSize: 14, color: PdfColors.grey700),
+                ),
+                pw.SizedBox(height: 24),
+                pw.Container(
+                  padding: const pw.EdgeInsets.all(16),
+                  decoration: pw.BoxDecoration(
+                    border: pw.Border.all(color: PdfColors.grey300),
+                    borderRadius: pw.BorderRadius.circular(8),
+                  ),
+                  child: pw.Column(
+                    crossAxisAlignment: pw.CrossAxisAlignment.start,
+                    children: [
+                      _pdfRow('Disease', _disease),
+                      pw.SizedBox(height: 8),
+                      _pdfRow('Severity', _severity),
+                      pw.SizedBox(height: 8),
+                      _pdfRow('Confidence',
+                          '${(_confidence * 100).toStringAsFixed(1)}%'),
+                      pw.SizedBox(height: 8),
+                      _pdfRow('Infected Leaf Area',
+                          '${_infectedArea.toStringAsFixed(0)}%'),
+                      pw.SizedBox(height: 8),
+                      _pdfRow('Scan Date', dateStr),
+                    ],
+                  ),
+                ),
+                pw.SizedBox(height: 24),
+                pw.Text(
+                  'Recommended Actions',
+                  style: pw.TextStyle(
+                    fontSize: 14,
+                    fontWeight: pw.FontWeight.bold,
+                    color: PdfColor.fromHex('#0D631B'),
+                  ),
+                ),
+                pw.SizedBox(height: 8),
+                ..._recommendations.map(
+                  (r) => pw.Padding(
+                    padding: const pw.EdgeInsets.only(bottom: 4),
+                    child: pw.Text('•  $r', style: const pw.TextStyle(fontSize: 11)),
+                  ),
+                ),
+                pw.Spacer(),
+                pw.Divider(color: PdfColors.grey300),
+                pw.Text(
+                  'Generated by CashewGuard AI',
+                  style: const pw.TextStyle(fontSize: 9, color: PdfColors.grey500),
+                ),
+              ],
+            ),
+          ),
+        ),
+      );
+
+      final dir = await getTemporaryDirectory();
+      final file = File(
+          '${dir.path}/cashewguard_result_${DateTime.now().millisecondsSinceEpoch}.pdf');
+      await file.writeAsBytes(await pdf.save());
+
+      await Share.shareXFiles(
+        [XFile(file.path)],
+        text:
+            'My cashew leaf scan result from CashewGuard AI: $_disease ($_severity severity).',
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Could not generate PDF: $e',
+                style: GoogleFonts.inter(color: Colors.white)),
+            backgroundColor: const Color(0xFFBA1A1A),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isSharing = false);
+    }
+  }
+
+  pw.Widget _pdfRow(String label, String value) {
+    return pw.Row(
+      mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+      children: [
+        pw.Text(label,
+            style: const pw.TextStyle(fontSize: 11, color: PdfColors.grey700)),
+        pw.Text(value,
+            style: pw.TextStyle(fontSize: 11, fontWeight: pw.FontWeight.bold)),
+      ],
+    );
   }
 
   // ============================================
@@ -238,7 +500,6 @@ class _PredictionResultState extends State<PredictionResult>
                     ),
                   ),
                   const SizedBox(height: 28),
-                  // Tips card
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -375,7 +636,6 @@ class _PredictionResultState extends State<PredictionResult>
                     ),
                   ),
                   const SizedBox(height: 28),
-                  // Info card
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
@@ -485,10 +745,7 @@ class _PredictionResultState extends State<PredictionResult>
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
 
-    // ✅ Show "not a leaf" screen
     if (_isUnrecognized) return _buildNotALeafScreen(context, l10n);
-
-    // ✅ Show "server waking up" screen
     if (_isTimeout) return _buildTimeoutScreen(context, l10n);
 
     final infectedPercent = (_infectedArea / 100).clamp(0.0, 1.0);
@@ -554,23 +811,35 @@ class _PredictionResultState extends State<PredictionResult>
                           color: const Color(0xFF0D631B),
                         ),
                       ),
-                      Container(
-                        width: 40,
-                        height: 40,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(12),
-                          boxShadow: [
-                            BoxShadow(
-                              color: const Color(0xFF0D631B)
-                                  .withValues(alpha: 0.08),
-                              blurRadius: 10,
-                              offset: const Offset(0, 4),
-                            ),
-                          ],
+                      // ✅ AI: share icon now wired to real functionality
+                      GestureDetector(
+                        onTap: _isSharing ? null : _showShareOptions,
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(12),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF0D631B)
+                                    .withValues(alpha: 0.08),
+                                blurRadius: 10,
+                                offset: const Offset(0, 4),
+                              ),
+                            ],
+                          ),
+                          child: _isSharing
+                              ? const Padding(
+                                  padding: EdgeInsets.all(10),
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Color(0xFF0D631B),
+                                  ),
+                                )
+                              : const Icon(Icons.share_outlined,
+                                  color: Color(0xFF0D631B), size: 20),
                         ),
-                        child: const Icon(Icons.share_outlined,
-                            color: Color(0xFF0D631B), size: 20),
                       ),
                     ],
                   ),
@@ -588,98 +857,105 @@ class _PredictionResultState extends State<PredictionResult>
                           children: [
                             const SizedBox(height: 8),
 
-                            // Disease result card
-                            Container(
-                              width: double.infinity,
-                              padding: const EdgeInsets.all(24),
-                              decoration: BoxDecoration(
-                                gradient: LinearGradient(
-                                  begin: Alignment.topLeft,
-                                  end: Alignment.bottomRight,
-                                  colors: _isHealthy
-                                      ? [
-                                          const Color(0xFF1B5E20),
-                                          const Color(0xFF4CAF50),
-                                        ]
-                                      : [
-                                          const Color(0xFF2E7D32),
-                                          _severityColor,
-                                        ],
+                            // ✅ AI: wrapped in RepaintBoundary so the
+                            // "Share as Image" option can capture exactly
+                            // this card.
+                            RepaintBoundary(
+                              key: _resultCardKey,
+                              child: Container(
+                                width: double.infinity,
+                                padding: const EdgeInsets.all(24),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF8FAF8),
+                                  gradient: LinearGradient(
+                                    begin: Alignment.topLeft,
+                                    end: Alignment.bottomRight,
+                                    colors: _isHealthy
+                                        ? [
+                                            const Color(0xFF1B5E20),
+                                            const Color(0xFF4CAF50),
+                                          ]
+                                        : [
+                                            const Color(0xFF2E7D32),
+                                            _severityColor,
+                                          ],
+                                  ),
+                                  borderRadius: BorderRadius.circular(24),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: const Color(0xFF0D631B)
+                                          .withValues(alpha: 0.3),
+                                      blurRadius: 20,
+                                      offset: const Offset(0, 8),
+                                    ),
+                                  ],
                                 ),
-                                borderRadius: BorderRadius.circular(24),
-                                boxShadow: [
-                                  BoxShadow(
-                                    color: const Color(0xFF0D631B)
-                                        .withValues(alpha: 0.3),
-                                    blurRadius: 20,
-                                    offset: const Offset(0, 8),
-                                  ),
-                                ],
-                              ),
-                              child: Column(
-                                children: [
-                                  Container(
-                                    width: 72,
-                                    height: 72,
-                                    decoration: BoxDecoration(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.15),
-                                      borderRadius: BorderRadius.circular(22),
+                                child: Column(
+                                  children: [
+                                    Container(
+                                      width: 72,
+                                      height: 72,
+                                      decoration: BoxDecoration(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.15),
+                                        borderRadius: BorderRadius.circular(22),
+                                      ),
+                                      child: Icon(
+                                        _isHealthy
+                                            ? Icons.eco
+                                            : Icons.coronavirus,
+                                        color: Colors.white,
+                                        size: 38,
+                                      ),
                                     ),
-                                    child: Icon(
-                                      _isHealthy
-                                          ? Icons.eco
-                                          : Icons.coronavirus,
-                                      color: Colors.white,
-                                      size: 38,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Text(
-                                    _displayTitle(l10n),
-                                    style: GoogleFonts.manrope(
-                                      fontSize: 22,
-                                      fontWeight: FontWeight.w700,
-                                      color: Colors.white,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 6),
-                                  Container(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 14, vertical: 6),
-                                    decoration: BoxDecoration(
-                                      color:
-                                          Colors.white.withValues(alpha: 0.2),
-                                      borderRadius: BorderRadius.circular(999),
-                                    ),
-                                    child: Text(
-                                      '$_severity${l10n.severitySuffix}',
-                                      style: GoogleFonts.inter(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
+                                    const SizedBox(height: 16),
+                                    Text(
+                                      _displayTitle(l10n),
+                                      style: GoogleFonts.manrope(
+                                        fontSize: 22,
+                                        fontWeight: FontWeight.w700,
                                         color: Colors.white,
                                       ),
                                     ),
-                                  ),
-                                  const SizedBox(height: 16),
-                                  Row(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    children: [
-                                      const Icon(Icons.verified,
-                                          color: Colors.white, size: 16),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        '$confidencePercent${l10n.confidenceSuffix}',
-                                        style: GoogleFonts.jetBrainsMono(
+                                    const SizedBox(height: 6),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(
+                                          horizontal: 14, vertical: 6),
+                                      decoration: BoxDecoration(
+                                        color: Colors.white
+                                            .withValues(alpha: 0.2),
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        '$_severity${l10n.severitySuffix}',
+                                        style: GoogleFonts.inter(
                                           fontSize: 13,
                                           fontWeight: FontWeight.w600,
-                                          color: Colors.white
-                                              .withValues(alpha: 0.9),
+                                          color: Colors.white,
                                         ),
                                       ),
-                                    ],
-                                  ),
-                                ],
+                                    ),
+                                    const SizedBox(height: 16),
+                                    Row(
+                                      mainAxisAlignment:
+                                          MainAxisAlignment.center,
+                                      children: [
+                                        const Icon(Icons.verified,
+                                            color: Colors.white, size: 16),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          '$confidencePercent${l10n.confidenceSuffix}',
+                                          style: GoogleFonts.jetBrainsMono(
+                                            fontSize: 13,
+                                            fontWeight: FontWeight.w600,
+                                            color: Colors.white
+                                                .withValues(alpha: 0.9),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ],
+                                ),
                               ),
                             ),
 
@@ -722,11 +998,7 @@ class _PredictionResultState extends State<PredictionResult>
 
                             const SizedBox(height: 12),
 
-                            // ✅ AI: Ask AI to Explain button — opens the
-                            // chat screen with the real scan numbers so the
-                            // AI can explain this exact result and answer
-                            // any follow-up questions (about the result,
-                            // farming generally, or the app itself).
+                            // Ask AI to Explain button
                             SizedBox(
                               width: double.infinity,
                               child: ElevatedButton.icon(
